@@ -1,0 +1,448 @@
+import sqlite3
+import os
+from datetime import datetime
+
+
+# Mayusculas
+def capitalizar(texto):
+    """Primera letra en mayuscula sin tocar el resto."""
+    if not texto:
+        return texto
+    return texto[0].upper() + texto[1:]
+
+# Colores ANSI directos (reemplazo de colorama)
+class Fore:
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    MAGENTA = "\033[95m"
+
+
+class Style:
+    BRIGHT = "\033[1m"
+    RESET_ALL = "\033[0m"
+
+
+# Configuracion
+RUTA_DB = "inventario.db"
+CARPETA_LOGS = "logs"
+RUTA_LOGS = f"{CARPETA_LOGS}/inventario.log"
+
+os.makedirs(CARPETA_LOGS, exist_ok=True)
+
+
+# Logs
+
+def registrar_log(nivel, mensaje):
+    """Escritura de logs segura."""
+    try:
+        fechayhora = datetime.now().strftime("%d/%m/%y·%H:%M:%S")
+        linea = f"{fechayhora} / {nivel} / {mensaje}\n"
+        with open(RUTA_LOGS, "a", encoding="utf-8") as archivo:
+            archivo.write(linea)
+    except Exception:
+        pass  # Silenciamos errores de log para no bloquear el programa
+
+
+def mostrar_titulo(texto):
+    print()
+    print(Fore.CYAN + Style.BRIGHT + f"=== {capitalizar(texto)} ===" + Style.RESET_ALL)
+
+
+def mostrar_exito(texto):
+    print(Fore.GREEN + f"✔ {capitalizar(texto)}" + Style.RESET_ALL)
+
+
+def mostrar_error(texto):
+    print(Fore.RED + f"✘ {capitalizar(texto)}" + Style.RESET_ALL)
+
+
+def mostrar_aviso(texto):
+    print(Fore.YELLOW + f"! {capitalizar(texto)}" + Style.RESET_ALL)
+
+
+# Base de datos
+
+def ejecutar_consulta(sql, parametros=(), traer_datos=False):
+    conexion = sqlite3.connect(RUTA_DB)
+    try:
+        cursor = conexion.cursor()
+        cursor.execute(sql, parametros)
+
+        if traer_datos:
+            return cursor.fetchall()
+
+        conexion.commit()
+        return cursor.rowcount
+    except sqlite3.Error as error:
+        mostrar_error(f"Error en la base de datos: {error}")
+        registrar_log("ERROR", f"Base de datos: {error}")
+        return [] if traer_datos else 0
+    finally:
+        conexion.close()
+
+
+def crear_tabla():
+    sql = """
+        CREATE TABLE IF NOT EXISTS productos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            descripcion TEXT,
+            cantidad INTEGER NOT NULL,
+            precio REAL NOT NULL,
+            categoria TEXT
+        )
+    """
+    ejecutar_consulta(sql)
+    registrar_log("INFO", "Programa iniciado. Tabla 'productos' verificada.")
+
+
+# Validaciones
+
+def pedir_texto(mensaje, obligatorio=True, actual=None):
+    while True:
+        etiqueta = capitalizar(mensaje)
+        prompt = f"{etiqueta} [{actual}]: " if actual is not None else f"{etiqueta}: "
+        texto = input(prompt).strip()
+
+        if texto == "" and actual is not None:
+            return actual
+
+        if texto == "" and obligatorio:
+            mostrar_error("Este campo no puede estar vacío.")
+            continue
+
+        return texto
+
+
+def pedir_entero(mensaje, actual=None, permitir_cero=True):
+    while True:
+        etiqueta = capitalizar(mensaje)
+        prompt = f"{etiqueta} [{actual}]: " if actual is not None else f"{etiqueta}: "
+        texto = input(prompt).strip()
+
+        if texto == "" and actual is not None:
+            return actual
+
+        try:
+            numero = int(texto)
+            if numero < 0:
+                mostrar_error("El número no puede ser negativo.")
+                continue
+            if not permitir_cero and numero == 0:
+                mostrar_error("La cantidad debe ser mayor a cero.")
+                continue
+            return numero
+        except ValueError:
+            mostrar_error("Ingresá un número entero válido (ej: 10).")
+
+
+def pedir_decimal(mensaje, actual=None):
+    while True:
+        etiqueta = capitalizar(mensaje)
+        prompt = f"{etiqueta} [{actual}]: " if actual is not None else f"{etiqueta}: "
+        texto = input(prompt).strip()
+
+        if texto == "" and actual is not None:
+            return actual
+
+        try:
+            numero = float(texto.replace(",", "."))
+            if numero < 0:
+                mostrar_error("El número no puede ser negativo.")
+                continue
+            return numero
+        except ValueError:
+            mostrar_error("Ingresá un número válido (ej: 1500.50).")
+
+
+def confirmar(mensaje: str) -> bool:
+    respuesta = input(f"{capitalizar(mensaje)} (s/n): ").strip().lower()
+    return respuesta == "s"
+
+
+# Funciones CRUD Y Reporte
+
+def mostrar_tabla(productos):
+    if not productos:
+        mostrar_aviso("No hay productos para mostrar.")
+        return
+
+    encabezado = f"{'ID':<5}{'NOMBRE':<22}{'CANT.':<8}{'PRECIO':<12}{'CATEGORÍA':<16}DESCRIPCIÓN"
+    print(Fore.CYAN + Style.BRIGHT + encabezado + Style.RESET_ALL)
+    print(Fore.CYAN + "-" * 85 + Style.RESET_ALL)
+
+    for producto in productos:
+        id_, nombre, descripcion, cantidad, precio, categoria = producto
+
+        col_nombre = capitalizar(nombre[:20])
+        col_categoria = capitalizar((categoria or "")[:14])
+        col_descripcion = capitalizar(descripcion or "")
+
+        print(f"{id_:<5}{col_nombre:<22}{cantidad:<8}${precio:<11.2f}{col_categoria:<16}{col_descripcion}")
+
+    print(Fore.CYAN + "-" * 85 + Style.RESET_ALL)
+    print(f"Total: {len(productos)} producto(s)")
+
+
+def obtener_producto_por_id(id_producto):
+    resultado = ejecutar_consulta(
+        "SELECT * FROM productos WHERE id = ?", (id_producto,), traer_datos=True
+    )
+    return resultado[0] if resultado else None
+
+
+def registrar_producto():
+    mostrar_titulo("REGISTRAR PRODUCTO")
+    nombre = pedir_texto("Nombre")
+    descripcion = pedir_texto("Descripción (opcional)", obligatorio=False)
+    cantidad = pedir_entero("Cantidad")
+    precio = pedir_decimal("Precio")
+    categoria = pedir_texto("Categoría (opcional)", obligatorio=False)
+
+    sql = """
+        INSERT INTO productos (nombre, descripcion, cantidad, precio, categoria)
+        VALUES (?, ?, ?, ?, ?)
+    """
+    filas = ejecutar_consulta(sql, (nombre, descripcion, cantidad, precio, categoria))
+    if filas > 0:
+        mostrar_exito(f"Producto '{nombre}' registrado correctamente.")
+        registrar_log("INFO", f"Producto registrado: {nombre} (cant: {cantidad}, precio: {precio})")
+
+
+def ver_productos():
+    mostrar_titulo("LISTADO DE PRODUCTOS")
+    productos = ejecutar_consulta("SELECT * FROM productos ORDER BY id", traer_datos=True)
+    mostrar_tabla(productos)
+    registrar_log("INFO", "Se consultó el listado de productos.")
+
+
+def actualizar_producto():
+    mostrar_titulo("ACTUALIZAR PRODUCTO")
+    id_producto = pedir_entero("ID del producto a actualizar")
+    producto = obtener_producto_por_id(id_producto)
+
+    if producto is None:
+        mostrar_error(f"No existe un producto con ID {id_producto}.")
+        return
+
+    _, nombre, descripcion, cantidad, precio, categoria = producto
+
+    mostrar_aviso("Presioná Enter para mantener el valor actual.")
+    nuevo_nombre = pedir_texto("Nombre", actual=nombre)
+    nueva_descripcion = pedir_texto("Descripción", actual=descripcion or "")
+    nueva_cantidad = pedir_entero("Cantidad", actual=cantidad)
+    nuevo_precio = pedir_decimal("Precio", actual=precio)
+    nueva_categoria = pedir_texto("Categoría", actual=categoria or "")
+
+    sql = """
+        UPDATE productos
+        SET nombre = ?, descripcion = ?, cantidad = ?, precio = ?, categoria = ?
+        WHERE id = ?
+    """
+    filas = ejecutar_consulta(sql, (nuevo_nombre, nueva_descripcion, nueva_cantidad, nuevo_precio, nueva_categoria, id_producto))
+    if filas > 0:
+        mostrar_exito("Producto actualizado correctamente.")
+        registrar_log("INFO", f"Producto actualizado: ID {id_producto} ({nuevo_nombre})")
+
+
+def eliminar_producto():
+    mostrar_titulo("ELIMINAR PRODUCTO")
+    id_producto = pedir_entero("ID del producto a eliminar")
+    producto = obtener_producto_por_id(id_producto)
+
+    if producto is None:
+        mostrar_error(f"No existe un producto con ID {id_producto}.")
+        return
+
+    mostrar_tabla([producto])
+    if not confirmar("¿Seguro que querés eliminarlo?"):
+        mostrar_aviso("Eliminación cancelada.")
+        return
+
+    filas = ejecutar_consulta("DELETE FROM productos WHERE id = ?", (id_producto,))
+    if filas > 0:
+        mostrar_exito("Producto eliminado correctamente.")
+        registrar_log("WARNING", f"Producto eliminado: ID {id_producto} ({producto[1]})")
+
+
+def buscar_producto():
+    mostrar_titulo("BUSCAR PRODUCTO")
+    print("1. Buscar por ID")
+    print("2. Buscar por Nombre")
+    print("3. Buscar por Categoría")
+    opcion = input(capitalizar("Elegí un criterio de búsqueda") + ": ").strip()
+
+    if opcion == "1":
+        id_producto = pedir_entero("Ingresá el ID a buscar")
+        producto = obtener_producto_por_id(id_producto)
+        productos = [producto] if producto else []
+        registrar_log("INFO", f"Búsqueda por ID: {id_producto}")
+
+    elif opcion == "2":
+        termino = pedir_texto("Ingresá el nombre o palabra clave")
+        sql = "SELECT * FROM productos WHERE nombre LIKE ? ORDER BY id"
+        productos = ejecutar_consulta(sql, (f"%{termino}%",), traer_datos=True)
+        registrar_log("INFO", f"Búsqueda por nombre: '{termino}'")
+
+    elif opcion == "3":
+        termino = pedir_texto("Ingresá la categoría")
+        sql = "SELECT * FROM productos WHERE categoria LIKE ? ORDER BY id"
+        productos = ejecutar_consulta(sql, (f"%{termino}%",), traer_datos=True)
+        registrar_log("INFO", f"Búsqueda por categoría: '{termino}'")
+
+    else:
+        mostrar_error("Criterio de búsqueda inválido.")
+        return
+
+    mostrar_tabla(productos)
+
+
+def generar_reporte():
+    mostrar_titulo("REPORTE DE INVENTARIO Y BAJO STOCK")
+    limite = pedir_entero("Mostrar productos con stock igual o menor a")
+
+    sql = """
+    SELECT id, nombre, cantidad, precio
+    FROM productos
+    WHERE cantidad <= ?
+    ORDER BY cantidad ASC
+    """
+    productosbajostock = ejecutar_consulta(sql, (limite,), traer_datos=True)
+    print()
+    print(Fore.YELLOW + Style.BRIGHT + f"--- PRODUCTOS CON STOCK <= {limite} ---" + Style.RESET_ALL)
+    mostrar_tabla(productosbajostock)
+
+    resumen = ejecutar_consulta(
+        "SELECT COUNT(*), SUM(cantidad), SUM(cantidad * precio) FROM productos",
+        traer_datos=True
+    )
+    total_tipos, total_unidades, valor_total = resumen[0]
+
+    # Acá convertimos None en 0 manualmente
+    total_unidades = total_unidades if total_unidades is not None else 0
+    valor_total = valor_total if valor_total is not None else 0
+
+    print()
+    print(Fore.CYAN + Style.BRIGHT + "--- RESUMEN GENERAL DEL INVENTARIO ---" + Style.RESET_ALL)
+    print(f"• Variedad de productos : {total_tipos}")
+    print(f"• Unidades en stock     : {total_unidades}")
+    print(f"• Valorización total    : ${valor_total:,.2f}")
+
+    registrar_log("INFO", f"Reporte generado (límite bajo stock: {limite}).")
+
+
+# Stock
+
+def controlar_stock():
+    mostrar_titulo("CONTROL DE STOCK (ENTRADAS / SALIDAS)")
+
+    # 1. Buscar por nombre
+    nombre_buscar = pedir_texto("Ingresá el nombre del producto")
+    sql = "SELECT * FROM productos WHERE nombre LIKE ? ORDER BY id"
+    resultados = ejecutar_consulta(sql, (f"%{nombre_buscar}%",), traer_datos=True)
+
+    if not resultados:
+        mostrar_error(f"No se encontró ningún producto con el nombre '{nombre_buscar}'.")
+        return
+
+    # 2. Si hay más de una coincidencia, mostrar lista y elegir por ID
+    if len(resultados) > 1:
+        mostrar_aviso(f"Se encontraron {len(resultados)} productos. Elegí uno:")
+        mostrar_tabla(resultados)
+        id_producto = pedir_entero("Ingresá el ID del producto correcto")
+        producto = next((p for p in resultados if p[0] == id_producto), None)
+
+        if producto is None:
+            mostrar_error("Ese ID no está en los resultados de la búsqueda.")
+            return
+    else:
+        producto = resultados[0]
+        id_producto = producto[0]
+
+    _, nombre, _, stock_actual, _, _ = producto
+    print(f"\nProducto seleccionado: {Fore.CYAN + Style.BRIGHT}{nombre}{Style.RESET_ALL} | Stock actual: {Fore.YELLOW + Style.BRIGHT}{stock_actual}{Style.RESET_ALL}")
+
+    print("\n1. Registrar ENTRADA (sumar stock)")
+    print("2. Registrar SALIDA (restar stock)")
+
+    tipo = input(capitalizar("Elegí una opción (1 o 2)") + ": ").strip()
+
+    cantidad_mov = pedir_entero("Cantidad a mover", permitir_cero=False)
+    motivo = pedir_texto("Motivo / Observación (opcional)", obligatorio=False)
+
+    if tipo == "1":
+        nuevo_stock = stock_actual + cantidad_mov
+        tipo_texto = "ENTRADA"
+    else:
+        if cantidad_mov > stock_actual:
+            mostrar_error(f"Stock insuficiente. Solo hay {stock_actual} unidad(es) disponible(s).")
+            return
+        nuevo_stock = stock_actual - cantidad_mov
+        tipo_texto = "SALIDA"
+
+    filas = ejecutar_consulta(
+        "UPDATE productos SET cantidad = ? WHERE id = ?",
+        (nuevo_stock, id_producto)
+    )
+
+    if filas > 0:
+        mostrar_exito(f"{tipo_texto} registrada. Nuevo stock de '{nombre}': {nuevo_stock} unidad(es).")
+        detalle_motivo = f" | Motivo: {motivo}" if motivo else ""
+        registrar_log(
+            "INFO",
+            f"Stock {tipo_texto}: ID {id_producto} ({nombre}) | Anterior: {stock_actual} -> Nuevo: {nuevo_stock} ({'+' if tipo == '1' else '-'}{cantidad_mov}){detalle_motivo}"
+        )
+
+
+# Menu
+
+def mostrar_menu():
+    print()
+    print(Fore.MAGENTA + Style.BRIGHT + "╔══════════════════════════════════╗")
+    print(Fore.MAGENTA + Style.BRIGHT + "║      SISTEMA DE INVENTARIO       ║")
+    print(Fore.MAGENTA + Style.BRIGHT + "╚══════════════════════════════════╝" + Style.RESET_ALL)
+    print("1. Registrar producto")
+    print("2. Ver productos")
+    print("3. Actualizar producto")
+    print("4. Eliminar producto")
+    print("5. Buscar producto")
+    print("6. Reportes de stock")
+    print("7. Control de stock (Entradas / Salidas)")
+    print("0. Salir")
+
+
+def main():
+    crear_tabla()
+    acciones = {
+        "1": registrar_producto,
+        "2": ver_productos,
+        "3": actualizar_producto,
+        "4": eliminar_producto,
+        "5": buscar_producto,   
+        "6": generar_reporte,    
+        "7": controlar_stock,    
+    }
+    
+    try:
+        while True:
+            mostrar_menu()
+            opcion = input("Elegí una opción: ").strip()
+            
+            if opcion == "0":
+                registrar_log("INFO", "Programa finalizado.")
+                print(Fore.CYAN + "¡Hasta luego!" + Style.RESET_ALL)
+                break
+            elif opcion in acciones:
+                acciones[opcion]()
+            else:
+                mostrar_error("Opción inválida. Probá de nuevo.")
+                
+    except KeyboardInterrupt:
+        print("\n" + Fore.YELLOW + "Programa interrumpido por el usuario." + Style.RESET_ALL)
+        registrar_log("¡CUIDADO!", "Programa finalizado abruptamente (Ctrl+C).")
+
+if __name__ == "__main__":
+    main()
+    
